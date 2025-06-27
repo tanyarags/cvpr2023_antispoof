@@ -305,7 +305,7 @@ class ModelManager:
             self.logger.info(f"Local model not found in: {model_dir}")
         
         # Download and save model
-        if self.download_and_save_model(model_name, model_dir, pretrained, num_classes=1000):
+        if self.download_and_save_model(model_name, model_dir, pretrained, num_classes=0):
             # Try loading the downloaded model
             model = self.load_local_model(model_name, model_dir, target_num_classes=num_classes)
         else:

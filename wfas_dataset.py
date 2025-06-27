@@ -14,6 +14,7 @@ class WFASDataset(Dataset):
     """
     Wild Face Anti-Spoofing Dataset reader for NetEase approach
     Supports two-stage training with different field of view strategies
+    Now includes images without annotation files using whole image as fallback
     """
     
     def __init__(self, 
@@ -67,6 +68,11 @@ class WFASDataset(Dataset):
                 spoof_count = sum(1 for s in self.samples if s['label'] == 0)
                 print(f"Live samples: {live_count}, Spoof samples: {spoof_count}")
                 
+                # Show samples with/without annotations
+                with_ann = sum(1 for s in self.samples if s['annotation_path'] is not None)
+                without_ann = len(self.samples) - with_ann
+                print(f"Samples with annotations: {with_ann}, without annotations: {without_ann}")
+                
                 # Show attack type distribution
                 attack_types = {}
                 for s in self.samples:
@@ -115,7 +121,7 @@ class WFASDataset(Dataset):
         return samples
     
     def _load_live_samples(self, split_dir):
-        """Load live samples"""
+        """Load live samples - now includes images without annotations"""
         samples = []
         live_dir = os.path.join(split_dir, 'living')
         
@@ -129,6 +135,9 @@ class WFASDataset(Dataset):
             print(f"Live directory contents: {os.listdir(live_dir)[:10]}...")  # Show first 10
         
         live_count = 0
+        live_with_ann = 0
+        live_without_ann = 0
+        
         for subject_id in os.listdir(live_dir):
             subject_path = os.path.join(live_dir, subject_id)
             if os.path.isdir(subject_path):
@@ -141,23 +150,37 @@ class WFASDataset(Dataset):
                         ann_path = os.path.join(subject_path, f"{base_name}.txt")
                         
                         if os.path.exists(ann_path):
+                            # Sample with annotation
                             samples.append({
                                 'image_path': img_path,
                                 'annotation_path': ann_path,
                                 'label': 1,  # Live
-                                'attack_type': 'living'
+                                'attack_type': 'living',
+                                'has_annotation': True
                             })
-                            live_count += 1
-                        elif self.debug and live_count < 5:  # Only show first few missing annotations
-                            print(f"Missing annotation for: {img_path}")
+                            live_with_ann += 1
+                        else:
+                            # Sample without annotation - include it anyway
+                            samples.append({
+                                'image_path': img_path,
+                                'annotation_path': None,  # No annotation file
+                                'label': 1,  # Live
+                                'attack_type': 'living',
+                                'has_annotation': False
+                            })
+                            live_without_ann += 1
+                            if self.debug and live_without_ann <= 5:  # Only show first few missing annotations
+                                print(f"Including image without annotation: {img_path}")
+                        
+                        live_count += 1
         
         if self.debug:
-            print(f"Loaded {live_count} live samples")
+            print(f"Loaded {live_count} live samples ({live_with_ann} with annotations, {live_without_ann} without)")
         
         return samples
     
     def _load_spoof_samples(self, split_dir):
-        """Load spoof samples"""
+        """Load spoof samples - now includes images without annotations"""
         samples = []
         spoof_dir = os.path.join(split_dir, 'spoof')
         
@@ -171,6 +194,9 @@ class WFASDataset(Dataset):
             print(f"Spoof directory contents: {os.listdir(spoof_dir)}")
         
         spoof_count = 0
+        spoof_with_ann = 0
+        spoof_without_ann = 0
+        
         for attack_category in os.listdir(spoof_dir):
             category_path = os.path.join(spoof_dir, attack_category)
             if os.path.isdir(category_path):
@@ -180,6 +206,9 @@ class WFASDataset(Dataset):
                     print(f"    Category contents (first 5): {category_contents[:5]}")
                 
                 category_count = 0
+                category_with_ann = 0
+                category_without_ann = 0
+                
                 for subject_id in os.listdir(category_path):
                     subject_path = os.path.join(category_path, subject_id)
                     if os.path.isdir(subject_path):
@@ -192,25 +221,46 @@ class WFASDataset(Dataset):
                                 ann_path = os.path.join(subject_path, f"{base_name}.txt")
                                 
                                 if os.path.exists(ann_path):
+                                    # Sample with annotation
                                     samples.append({
                                         'image_path': img_path,
                                         'annotation_path': ann_path,
                                         'label': 0,  # Spoof
-                                        'attack_type': attack_category
+                                        'attack_type': attack_category,
+                                        'has_annotation': True
                                     })
-                                    category_count += 1
-                                    spoof_count += 1
+                                    category_with_ann += 1
+                                    spoof_with_ann += 1
+                                else:
+                                    # Sample without annotation - include it anyway
+                                    samples.append({
+                                        'image_path': img_path,
+                                        'annotation_path': None,  # No annotation file
+                                        'label': 0,  # Spoof
+                                        'attack_type': attack_category,
+                                        'has_annotation': False
+                                    })
+                                    category_without_ann += 1
+                                    spoof_without_ann += 1
+                                    if self.debug and spoof_without_ann <= 5:  # Only show first few
+                                        print(f"    Including image without annotation: {img_path}")
+                                
+                                category_count += 1
+                                spoof_count += 1
                 
                 if self.debug:
-                    print(f"    Loaded {category_count} samples from {attack_category}")
+                    print(f"    Loaded {category_count} samples from {attack_category} ({category_with_ann} with ann, {category_without_ann} without)")
         
         if self.debug:
-            print(f"Loaded {spoof_count} total spoof samples")
+            print(f"Loaded {spoof_count} total spoof samples ({spoof_with_ann} with annotations, {spoof_without_ann} without)")
         
         return samples
     
     def _parse_annotation(self, ann_path):
-        """Parse annotation file to get bbox and landmarks"""
+        """Parse annotation file to get bbox and landmarks - returns None if no file"""
+        if ann_path is None:
+            return None, None
+            
         try:
             with open(ann_path, 'r') as f:
                 lines = f.readlines()
@@ -237,6 +287,25 @@ class WFASDataset(Dataset):
             if self.debug:
                 print(f"Error parsing annotation {ann_path}: {e}")
             return None, None
+    
+    def _generate_fallback_bbox_landmarks(self, img_shape):
+        """Generate fallback bbox and landmarks for whole image"""
+        h, w = img_shape[:2]
+        
+        # Use entire image as bounding box
+        bbox = [0, 0, w, h]
+        
+        # Generate reasonable default landmarks (approximate face positions)
+        # Left eye, right eye, nose, left mouth corner, right mouth corner
+        landmarks = [
+            [w // 4, h // 3],          # Left eye
+            [3 * w // 4, h // 3],      # Right eye  
+            [w // 2, h // 2],          # Nose
+            [w // 3, 2 * h // 3],      # Left mouth corner
+            [2 * w // 3, 2 * h // 3]   # Right mouth corner
+        ]
+        
+        return bbox, landmarks
     
     def _expand_bbox(self, bbox, expansion_factor, img_shape):
         """Expand bbox by given factor"""
@@ -327,13 +396,14 @@ class WFASDataset(Dataset):
                 raise ValueError(f"Could not load image: {sample['image_path']}")
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            # Parse annotation
+            # Parse annotation or use fallback
             bbox, landmarks = self._parse_annotation(sample['annotation_path'])
             if bbox is None or landmarks is None:
-                # Use full image as fallback
-                h, w = image.shape[:2]
-                bbox = [0, 0, w, h]
-                landmarks = [[w//4, h//3], [3*w//4, h//3], [w//2, h//2], [w//3, 2*h//3], [2*w//3, 2*h//3]]
+                # Generate fallback bbox and landmarks for whole image
+                bbox, landmarks = self._generate_fallback_bbox_landmarks(image.shape)
+                if self.debug and idx < 5:  # Only print for first few samples
+                    annotation_status = "no annotation file" if sample['annotation_path'] is None else "malformed annotation"
+                    print(f"Using whole image fallback for {sample['image_path']} ({annotation_status})")
             
             # Determine expansion factor based on stage
             if self.stage == 'stage1':
@@ -372,7 +442,8 @@ class WFASDataset(Dataset):
                 'attack_type': sample['attack_type'],
                 'image_path': sample['image_path'],
                 'bbox': torch.tensor(bbox, dtype=torch.float32),
-                'landmarks': torch.tensor(landmarks, dtype=torch.float32)
+                'landmarks': torch.tensor(landmarks, dtype=torch.float32),
+                'has_annotation': sample['has_annotation']
             }
             
             # Add soft labels for stage2
@@ -394,7 +465,8 @@ class WFASDataset(Dataset):
                 'attack_type': 'error',
                 'image_path': sample['image_path'],
                 'bbox': torch.tensor([0, 0, 100, 100], dtype=torch.float32),
-                'landmarks': torch.tensor([[25, 25], [75, 25], [50, 50], [35, 75], [65, 75]], dtype=torch.float32)
+                'landmarks': torch.tensor([[25, 25], [75, 25], [50, 50], [35, 75], [65, 75]], dtype=torch.float32),
+                'has_annotation': False
             }
 
 
@@ -432,7 +504,8 @@ class MixupCutmixCollator:
             'attack_type': [item['attack_type'] for item in batch],
             'image_path': [item['image_path'] for item in batch],
             'bbox': torch.stack([item['bbox'] for item in batch]),
-            'landmarks': torch.stack([item['landmarks'] for item in batch])
+            'landmarks': torch.stack([item['landmarks'] for item in batch]),
+            'has_annotation': [item['has_annotation'] for item in batch]
         }
         
         # Add soft labels if available
@@ -526,7 +599,10 @@ def debug_dataset_structure(data_root):
                     first_subject = os.path.join(live_path, live_subjects[0])
                     if os.path.isdir(first_subject):
                         files = os.listdir(first_subject)
-                        print(f"First live subject files: {files[:5]}")
+                        img_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                        txt_files = [f for f in files if f.endswith('.txt')]
+                        print(f"First live subject: {len(img_files)} images, {len(txt_files)} annotations")
+                        print(f"Sample files: {files[:5]}")
             
             if os.path.exists(spoof_path):
                 spoof_categories = os.listdir(spoof_path)
@@ -543,7 +619,10 @@ def debug_dataset_structure(data_root):
                             first_subject = os.path.join(first_category, subjects[0])
                             if os.path.isdir(first_subject):
                                 files = os.listdir(first_subject)
-                                print(f"First spoof subject files: {files[:5]}")
+                                img_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                                txt_files = [f for f in files if f.endswith('.txt')]
+                                print(f"First spoof subject: {len(img_files)} images, {len(txt_files)} annotations")
+                                print(f"Sample files: {files[:5]}")
 
 
 def create_dataloaders_with_debug(data_root, 
@@ -670,5 +749,12 @@ if __name__ == "__main__":
             print(f"Image shape: {batch['image'].shape}")
             print(f"Label shape: {batch['label'].shape}")
             print(f"Attack types: {batch['attack_type']}")
+            print(f"Has annotations: {batch['has_annotation']}")
+            
+            # Count samples with/without annotations in this batch
+            with_ann = sum(batch['has_annotation'])
+            without_ann = len(batch['has_annotation']) - with_ann
+            print(f"Batch annotation status: {with_ann} with annotations, {without_ann} without")
+            
         except Exception as e:
             print(f"Error loading batch: {e}")
