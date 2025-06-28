@@ -397,9 +397,59 @@ class Stage2Trainer:
         )
         self.logger = logging.getLogger(__name__)
 
+    def verify_random_initialization(model: nn.Module, sample_size: int = 10) -> bool:
+        """
+        Verify that a model has random initialization (not pretrained weights)
+
+        Args:
+            model: Model to check
+            sample_size: Number of parameters to sample
+
+        Returns:
+            True if weights appear to be randomly initialized
+        """
+        import numpy as np
+
+        # Collect some weight statistics
+        weight_means = []
+        weight_stds = []
+
+        for name, param in model.named_parameters():
+            if 'weight' in name and param.dim() >= 2:  # Check weight matrices
+                # Get statistics
+                weight_mean = param.data.mean().item()
+                weight_std = param.data.std().item()
+
+                weight_means.append(weight_mean)
+                weight_stds.append(weight_std)
+
+                if len(weight_means) >= sample_size:
+                    break
+
+        # Check if weights look like random initialization
+        # Random init typically has mean close to 0 and std following certain patterns
+        mean_of_means = np.mean(weight_means)
+        std_of_means = np.std(weight_means)
+        mean_of_stds = np.mean(weight_stds)
+
+        # Random initialization heuristics:
+        # 1. Mean should be very close to 0
+        # 2. Std should be consistent with initialization schemes (typically 0.01-0.1)
+        # 3. Different layers should have different patterns (high std of means)
+
+        is_random = (
+            abs(mean_of_means) < 0.01 and  # Mean close to 0
+            0.01 < mean_of_stds < 0.2 and   # Reasonable std range
+            std_of_means < 0.01             # Means are clustered around 0
+        )
+
+        return is_random
+
+
+    # Add this to Stage2Trainer.create_model() for verification:
     def create_model(self):
         """Create MaxViT model using ModelManager"""
-        # First get the backbone model
+        # Get the backbone model
         backbone_model = self.model_manager.load_or_download_model(
             stage='stage2',
             model_name=self.config['model_name'],
@@ -407,6 +457,26 @@ class Stage2Trainer:
             pretrained=self.config['pretrained'],
             device=self.device
         )
+
+        # Verify initialization if pretrained=False
+        if not self.config['pretrained']:
+            is_random = verify_random_initialization(backbone_model)
+            if is_random:
+                self.logger.info("✓ Verified: Model has random initialization")
+            else:
+                self.logger.warning("⚠ Warning: Model weights don't appear to be randomly initialized!")
+                # Optionally force re-initialization
+                if self.config.get('force_random_init', True):
+                    self.logger.info("Force re-initializing model weights...")
+                    for name, param in backbone_model.named_parameters():
+                        if 'weight' in name:
+                            if param.dim() >= 2:
+                                nn.init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+                            elif param.dim() == 1:
+                                nn.init.constant_(param, 0)
+                        elif 'bias' in name:
+                            nn.init.constant_(param, 0)
+                    self.logger.info("Model weights re-initialized")
 
         # Create our custom model with features
         model = MaxViTWithFeatures(
@@ -802,6 +872,38 @@ class Stage2Trainer:
 
         return test_acc, test_acer
 
+        # In Stage2Trainer.__init__, add clear logging about initialization:
+        def setup_logging(self):
+            """Setup logging"""
+            os.makedirs(self.config['log_dir'], exist_ok=True)
+            log_file = os.path.join(self.config['log_dir'], f"stage2_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.FileHandler(log_file),
+                    logging.StreamHandler()
+                ]
+            )
+            self.logger = logging.getLogger(__name__)
+
+            # Log initialization strategy clearly
+            self.logger.info("="*60)
+            self.logger.info("STAGE 2 TRAINING INITIALIZATION")
+            self.logger.info("="*60)
+
+            if self.config['pretrained']:
+                self.logger.info("► Model Initialization: Using PRETRAINED weights (ImageNet)")
+            else:
+                self.logger.info("► Model Initialization: Using RANDOM weights")
+                self.logger.info("  Note: Model will be initialized from scratch")
+                self.logger.info("  This is typically used for: ")
+                self.logger.info("  - Training from scratch on your dataset")
+                self.logger.info("  - Avoiding ImageNet bias")
+                self.logger.info("  - Research experiments requiring random init")
+
+            self.logger.info("="*60)
 
 def get_default_config():
     """Get default configuration for Stage 2"""
