@@ -953,6 +953,117 @@ def get_default_config():
         'debug': True
     }
 
+def get_optimized_config_no_pretrained():
+    """Optimized configuration for Stage 2 training from scratch (no pretrained weights)"""
+    return {
+        # Data settings
+        'data_root': '/path/to/WFAS/dataset',
+        'soft_labels_path': './outputs/stage1_soft_labels.pth',
+        'image_size': 224,
+        'batch_size': 64,  # Increased for better gradient estimates
+        'num_workers': 4,
+
+        # Model settings
+        'model_name': 'maxvit_small_tf_224',  # Start with smaller model for random init
+        'feature_dim': 512,
+        'pretrained': False,  # No pretrained weights
+        'model_cache_dir': './model',
+
+        # Training settings - Adjusted for training from scratch
+        'num_epochs': 100,  # More epochs needed for random init
+        'learning_rate': 3e-4,  # Higher initial LR for random weights
+        'weight_decay': 0.05,  # Stronger regularization
+        'optimizer': 'adamw',
+        'scheduler': 'cosine',
+
+        # Warmup settings - Critical for random init
+        'use_warmup': True,
+        'warmup_epochs': 10,  # Gradual warmup
+        'warmup_lr': 1e-5,  # Start with very low LR
+
+        # Loss settings - Adjusted for random init
+        'focal_alpha': 0.25,  # Lower alpha for class imbalance
+        'focal_gamma': 2.0,
+        'triplet_margin': 0.5,  # Larger margin for random features
+        'kd_temperature': 5.0,  # Higher temperature for softer distillation
+        'kd_alpha': 0.5,  # Balance between hard and soft labels
+
+        # Loss weights - Start conservative with random init
+        'focal_weight': 1.0,
+        'triplet_weight': 0.1,  # Lower initially for random features
+        'kd_weight': 0.5,  # Less reliance on KD initially
+
+        # Mixup/Cutmix settings - More aggressive augmentation
+        'use_mixup_cutmix': True,
+        'mixup_alpha': 0.4,  # Stronger mixup
+        'cutmix_alpha': 1.0,
+        'mixup_cutmix_prob': 0.7,  # Higher probability
+
+        # Additional augmentation for random init
+        'use_randaugment': True,
+        'randaugment_n': 2,
+        'randaugment_m': 9,
+
+        # Gradient clipping - Important for stability
+        'gradient_clip_val': 1.0,
+
+        # Learning rate schedule
+        'lr_min': 1e-6,  # Minimum LR for cosine schedule
+
+        # Paths
+        'checkpoint_dir': './checkpoints/stage2',
+        'log_dir': './logs/stage2',
+        'output_dir': './outputs',
+
+        # Debug
+        'debug': True
+    }
+
+
+def get_alternative_configs():
+    """Alternative configurations for different scenarios"""
+
+    # Configuration 1: Conservative approach
+    config_conservative = {
+        'batch_size': 32,
+        'learning_rate': 1e-4,
+        'num_epochs': 150,
+        'focal_weight': 1.0,
+        'triplet_weight': 0.0,  # Disable triplet loss initially
+        'kd_weight': 1.0,
+        'model_name': 'maxvit_tiny_tf_224',  # Even smaller model
+    }
+
+    # Configuration 2: Aggressive approach
+    config_aggressive = {
+        'batch_size': 128,  # Large batch with gradient accumulation
+        'gradient_accumulation_steps': 4,
+        'learning_rate': 5e-4,
+        'num_epochs': 80,
+        'focal_weight': 1.0,
+        'triplet_weight': 0.3,
+        'kd_weight': 0.3,
+        'model_name': 'maxvit_base_tf_224',
+    }
+
+    # Configuration 3: Two-stage training
+    config_two_stage = {
+        # Stage 1: Train with only focal loss + KD
+        'stage1_epochs': 50,
+        'stage1_triplet_weight': 0.0,
+        'stage1_lr': 3e-4,
+
+        # Stage 2: Add triplet loss
+        'stage2_epochs': 50,
+        'stage2_triplet_weight': 0.5,
+        'stage2_lr': 1e-4,
+    }
+
+    return {
+        'conservative': config_conservative,
+        'aggressive': config_aggressive,
+        'two_stage': config_two_stage
+    }
 
 def main():
     parser = argparse.ArgumentParser(description='Stage 2 Training - MaxViT')
